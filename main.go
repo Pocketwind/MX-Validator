@@ -98,51 +98,63 @@ func main() {
 		}
 	}()
 
-	for file := range fileChannel {
+	for path := range fileChannel {
 		fmt.Println("------------------------------------------")
-		fmt.Println("File detected:", file)
+		fmt.Println("File detected:", path)
 		var valid bool
 		var err error
-		//XSD 체크
-		valid, err = ValidateFile(file, messageTypes)
+		//전문 읽기
+		file, err := os.Open(path)
 		if err != nil {
-			fmt.Println("Validation error for XML Structure - ", file, ":", err)
+			continue
+		}
+		defer file.Close()
+		doc, err := xmlquery.ParseWithOptions(file, xmlquery.ParserOptions{
+			WithLineNumbers: true,
+		})
+		if err != nil {
+			continue
+		}
+		//XSD 체크
+		valid, err = ValidateFile(doc, messageTypes)
+		if err != nil {
+			fmt.Println("Validation error for XML Structure - ", path, ":", err)
 		} else if valid {
-			fmt.Println("XML Structure is valid - ", file)
+			fmt.Println("XML Structure is valid - ", path)
 		} else {
-			fmt.Println("XML Structure is invalid - ", file)
+			fmt.Println("XML Structure is invalid - ", path)
 		}
 		//Currency 체크
-		valid, err = ValidateCurrency(file, currencies)
+		valid, err = ValidateCurrency(doc, currencies)
 		if err != nil {
-			fmt.Println("Validation error for Currency - ", file, ":", err)
+			fmt.Printf("%v\n", err)
 		} else if valid {
-			fmt.Println("Currency is valid - ", file)
+			fmt.Println("Currency is valid - ", path)
 		} else {
-			fmt.Println("Currency is invalid - ", file)
+			fmt.Println("Currency is invalid - ", path)
 		}
 		//Country 체크
-		valid, err = ValidateCountry(file, countries)
+		valid, err = ValidateCountry(doc, countries)
 		if err != nil {
-			fmt.Println("Validation error for Country - ", file, ":", err)
+			fmt.Printf("%v\n", err)
 		} else if valid {
-			fmt.Println("Country is valid - ", file)
+			fmt.Println("Country is valid - ", path)
 		} else {
-			fmt.Println("Country is invalid - ", file)
+			fmt.Println("Country is invalid - ", path)
 		}
 		//BIC 체크
-		valid, err = ValidateBIC(file, bic11, bic8)
+		valid, err = ValidateBIC(doc, bic11, bic8)
 		if err != nil {
-			fmt.Println("Validation error for BIC - ", file, ":", err)
+			fmt.Printf("%v\n", err)
 		} else if valid {
-			fmt.Println("BIC is valid - ", file)
+			fmt.Println("BIC is valid - ", path)
 		} else {
-			fmt.Println("BIC is invalid - ", file)
+			fmt.Println("BIC is invalid - ", path)
 		}
 	}
 }
 
-func ValidateCurrency(path string, currencies []string) (bool, error) {
+func ValidateCurrency(doc *xmlquery.Node, currencies []string) (bool, error) {
 	contains := func(slice []string, item string) bool {
 		for _, s := range slice {
 			if s == item {
@@ -151,27 +163,25 @@ func ValidateCurrency(path string, currencies []string) (bool, error) {
 		}
 		return false
 	}
-	file, err := os.Open(path)
-	if err != nil {
-		return false, err
-	}
-	defer file.Close()
-	doc, err := xmlquery.Parse(file)
-	if err != nil {
-		return false, err
-	}
 
-	ccy := xmlquery.Find(doc, "//*[@Ccy]/@Ccy")
+	ccy := xmlquery.Find(doc, "//*[@Ccy]")
 
+	var invalid bool
 	for _, c := range ccy {
-		if !contains(currencies, c.InnerText()) {
-			return false, nil
+		currency := c.SelectAttr("Ccy")
+		if !contains(currencies, currency) {
+			fmt.Printf("invalid Currency: %s(Line: %d)\n", currency, c.GetLineNumber())
+			//return false, fmt.Errorf("invalid Currency: %s(Line: %d)", currency, c.GetLineNumber())
+			invalid = true
 		}
+	}
+	if invalid {
+		return false, fmt.Errorf("one or more invalid currencies found")
 	}
 	return true, nil
 }
 
-func ValidateCountry(path string, countries []string) (bool, error) {
+func ValidateCountry(doc *xmlquery.Node, countries []string) (bool, error) {
 	contains := func(slice []string, item string) bool {
 		for _, s := range slice {
 			if s == item {
@@ -179,26 +189,23 @@ func ValidateCountry(path string, countries []string) (bool, error) {
 			}
 		}
 		return false
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return false, err
-	}
-	defer file.Close()
-	doc, err := xmlquery.Parse(file)
-	if err != nil {
-		return false, err
 	}
 	ctry := xmlquery.Find(doc, "//*[local-name()='Ctry']")
+	var invalid bool
 	for _, c := range ctry {
 		if !contains(countries, c.InnerText()) {
-			return false, nil
+			fmt.Printf("invalid Country: %s(Line: %d)\n", c.InnerText(), c.GetLineNumber())
+			//return false, fmt.Errorf("invalid Country: %s(Line: %d)", c.InnerText(), c.GetLineNumber())
+			invalid = true
 		}
+	}
+	if invalid {
+		return false, fmt.Errorf("one or more invalid countries found")
 	}
 	return true, nil
 }
 
-func ValidateBIC(path string, bic11 []string, bic8 []string) (bool, error) {
+func ValidateBIC(doc *xmlquery.Node, bic11 []string, bic8 []string) (bool, error) {
 	contains := func(slice []string, item string) bool {
 		for _, s := range slice {
 			if s == item {
@@ -207,30 +214,30 @@ func ValidateBIC(path string, bic11 []string, bic8 []string) (bool, error) {
 		}
 		return false
 	}
-	file, err := os.Open(path)
-	if err != nil {
-		return false, err
-	}
-	defer file.Close()
-	doc, err := xmlquery.Parse(file)
-	if err != nil {
-		return false, err
-	}
+
 	bicNodes := xmlquery.Find(doc, "//*[local-name()='BICFI']")
+	var invalid bool
 	for _, b := range bicNodes {
 		bic := b.InnerText()
 		if len(bic) == 11 && !contains(bic11, bic) {
-			return false, nil
+			fmt.Printf("invalid BIC11: %s(Line: %d)\n", bic, b.GetLineNumber())
+			//return false, fmt.Errorf("invalid BIC11: %s(Line: %d)", bic, b.GetLineNumber())
+			invalid = true
 		}
 		if len(bic) == 8 && !contains(bic8, bic) {
-			return false, nil
+			fmt.Printf("invalid BIC8: %s(Line: %d)\n", bic, b.GetLineNumber())
+			//return false, fmt.Errorf("invalid BIC8: %s(Line: %d)", bic, b.GetLineNumber())
+			invalid = true
 		}
+	}
+	if invalid {
+		return false, fmt.Errorf("one or more invalid BICs found")
 	}
 	return true, nil
 }
 
-func ValidateFile(path string, messageTypes []Message) (bool, error) {
-	apphdr, body, err := ExtractMessageType(path)
+func ValidateFile(doc *xmlquery.Node, messageTypes []Message) (bool, error) {
+	apphdr, body, err := ExtractMessageType(doc)
 	if err != nil {
 		fmt.Println("message type extraction error:", err)
 		return false, err
@@ -266,13 +273,7 @@ func ValidateFile(path string, messageTypes []Message) (bool, error) {
 	}
 
 	// xsd.Validator는 xdm.Node를 입력으로 받으므로 XML을 다시 xdm 트리로 파싱합니다.
-	file, err := os.Open(path)
-	if err != nil {
-		return false, err
-	}
-	defer file.Close()
-
-	tree, err := xdm.Parse(file, xdm.ParseOptions{
+	tree, err := xdm.Parse(strings.NewReader(doc.OutputXML(true)), xdm.ParseOptions{
 		TrackPositions: true,
 	})
 	if err != nil {
@@ -318,17 +319,7 @@ func findElement(node *xdm.Node, localName string) (*xdm.Node, error) {
 	return nil, fmt.Errorf("%s element not found", localName)
 }
 
-func ExtractMessageType(path string) (string, string, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return "", "", err
-	}
-	defer file.Close()
-
-	doc, err := xmlquery.Parse(file)
-	if err != nil {
-		return "", "", err
-	}
+func ExtractMessageType(doc *xmlquery.Node) (string, string, error) {
 
 	//cbpr 버전 체크
 	cbprVersionNode := xmlquery.FindOne(doc, "//*[local-name()='BizSvc']")
